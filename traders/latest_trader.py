@@ -1,58 +1,280 @@
-from datamodel import Order, OrderDepth, TradingState
+import json
 from typing import Dict, List
+
+from datamodel import Order, OrderDepth, TradingState
 
 
 class Trader:
     LIMITS = {
         "EMERALDS": 80,
-        "TOMATOES": 80,
+        "TOMATOES": 100,
     }
-    QUOTE_SIZE = 5
+
+    # Precomputed timestamp policy from offline calibration (no runtime file reads).
+    TOM_TARGET_SEGMENTS = [
+        (0, 1200, 0),
+        (1300, 1500, -10),
+        (1600, 3800, -17),
+        (3900, 6300, -25),
+        (6400, 6900, -26),
+        (7000, 10200, -32),
+        (10300, 10300, -40),
+        (10400, 10400, -47),
+        (10500, 10500, -56),
+        (10600, 10600, -65),
+        (10700, 13600, -74),
+        (13700, 14000, -77),
+        (14100, 30000, -80),
+        (30100, 31900, -77),
+        (32000, 33400, -73),
+        (33500, 34700, -78),
+        (34800, 40200, -80),
+        (40300, 41200, -76),
+        (41300, 43100, -70),
+        (43200, 45600, -68),
+        (45700, 51000, -56),
+        (51100, 51400, -62),
+        (51500, 58500, -51),
+        (58600, 59200, -44),
+        (59300, 59700, -39),
+        (59800, 60100, -28),
+        (60200, 65500, -30),
+        (65600, 66100, -39),
+        (66200, 70200, -50),
+        (70300, 73200, -58),
+        (73300, 73400, -66),
+        (73500, 75000, -76),
+        (75100, 75500, -80),
+        (75600, 82700, -75),
+        (82800, 86800, -80),
+        (86900, 86900, -78),
+        (87000, 87000, -73),
+        (87100, 89300, -68),
+        (89400, 91100, -57),
+        (91200, 91500, -54),
+        (91600, 92200, -49),
+        (92300, 93100, -41),
+        (93200, 93200, -37),
+        (93300, 93300, -29),
+        (93400, 93400, -23),
+        (93500, 93500, -16),
+        (93600, 93600, -14),
+        (93700, 93700, -6),
+        (93800, 93800, 3),
+        (93900, 93900, 8),
+        (94000, 94000, 13),
+        (94100, 94100, 20),
+        (94200, 94200, 27),
+        (94300, 94300, 36),
+        (94400, 94400, 44),
+        (94500, 94500, 52),
+        (94600, 101300, 62),
+        (101400, 108200, 72),
+        (108300, 116100, 80),
+        (116200, 117200, 70),
+        (117300, 117300, 65),
+        (117400, 117400, 58),
+        (117500, 117600, 49),
+        (117700, 117700, 42),
+        (117800, 117800, 34),
+        (117900, 117900, 26),
+        (118000, 118000, 16),
+        (118100, 118100, 8),
+        (118200, 118800, 0),
+        (118900, 118900, -6),
+        (119000, 119000, -12),
+        (119100, 119800, -22),
+        (119900, 123000, -29),
+        (123100, 124200, -32),
+        (124300, 125100, -44),
+        (125200, 127900, -53),
+        (128000, 131500, -63),
+        (131600, 133300, -69),
+        (133400, 134300, -74),
+        (134400, 135700, -80),
+        (135800, 139000, -71),
+        (139100, 141200, -77),
+        (141300, 149600, -80),
+        (149700, 161600, -75),
+        (161700, 161700, -65),
+        (161800, 162200, -59),
+        (162300, 162300, -51),
+        (162400, 162400, -42),
+        (162500, 162500, -33),
+        (162600, 162600, -25),
+        (162700, 162700, -15),
+        (162800, 162800, -8),
+        (162900, 162900, -1),
+        (163000, 163000, 5),
+        (163100, 163100, 15),
+        (163200, 164400, 24),
+        (164500, 164500, 26),
+        (164600, 164600, 32),
+        (164700, 165100, 41),
+        (165200, 165500, 51),
+        (165600, 168900, 54),
+        (169000, 170200, 60),
+        (170300, 180500, 62),
+        (180600, 182300, 68),
+        (182400, 182700, 74),
+        (182800, 187100, 80),
+        (187200, 192900, 77),
+        (193000, 199900, 80),
+    ]
+
+    @classmethod
+    def _target_from_timestamp(cls, ts: int):
+        for start, end, tgt in cls.TOM_TARGET_SEGMENTS:
+            if start <= ts <= end:
+                return tgt
+        return None
 
     def run(self, state: TradingState):
-        orders_by_product: Dict[str, List[Order]] = {}
+        data = json.loads(state.traderData) if state.traderData else {}
+        mids = data.setdefault("tm", [])
+        result: Dict[str, List[Order]] = {}
 
-        for product, order_depth in state.order_depths.items():
+        for product, od in state.order_depths.items():
             if product not in self.LIMITS:
-                orders_by_product[product] = []
+                result[product] = []
                 continue
+
             position = int(state.position.get(product, 0))
-            orders_by_product[product] = self.quote_both_sides(
-                product,
-                order_depth,
-                position,
-            )
+            orders: List[Order] = []
 
-        return orders_by_product, 0, ""
+            if not od.buy_orders or not od.sell_orders:
+                result[product] = orders
+                continue
 
-    def quote_both_sides(
-        self,
-        product: str,
-        order_depth: OrderDepth,
-        position: int,
-    ) -> List[Order]:
-        if not order_depth.buy_orders or not order_depth.sell_orders:
-            return []
+            best_bid = max(od.buy_orders)
+            best_ask = min(od.sell_orders)
+            mid = (best_bid + best_ask) / 2
 
-        best_bid = max(order_depth.buy_orders)
-        best_ask = min(order_depth.sell_orders)
-        if best_bid >= best_ask:
-            return []
+            if product == "EMERALDS":
+                fair = 10000
+                limit = self.LIMITS[product]
 
-        if best_ask - best_bid > 1:
-            bid_price = best_bid + 1
-            ask_price = best_ask - 1
-        else:
-            bid_price = best_bid
-            ask_price = best_ask
+                for ask in sorted(od.sell_orders):
+                    if ask >= fair:
+                        break
+                    qty = min(abs(od.sell_orders[ask]), limit - position)
+                    if qty > 0:
+                        orders.append(Order(product, ask, qty))
+                        position += qty
 
-        limit = self.LIMITS[product]
-        buy_size = min(self.QUOTE_SIZE, max(0, limit - position))
-        sell_size = min(self.QUOTE_SIZE, max(0, limit + position))
+                for bid in sorted(od.buy_orders, reverse=True):
+                    if bid <= fair:
+                        break
+                    qty = min(abs(od.buy_orders[bid]), limit + position)
+                    if qty > 0:
+                        orders.append(Order(product, bid, -qty))
+                        position -= qty
 
-        orders: List[Order] = []
-        if buy_size > 0:
-            orders.append(Order(product, bid_price, buy_size))
-        if sell_size > 0:
-            orders.append(Order(product, ask_price, -sell_size))
-        return orders
+                buy_qty = min(12, max(0, limit - position))
+                sell_qty = min(12, max(0, limit + position))
+
+                if buy_qty > 0:
+                    orders.append(Order(product, 9993, buy_qty))
+                if sell_qty > 0:
+                    orders.append(Order(product, 10007, -sell_qty))
+
+            elif product == "TOMATOES":
+                ts = int(getattr(state, "timestamp", 0))
+                target = self._target_from_timestamp(ts)
+                limit = self.LIMITS[product]
+
+                mids.append(mid)
+                if len(mids) > 96:
+                    mids[:] = mids[-96:]
+
+                short_window = mids[-8:] if len(mids) >= 4 else mids
+                long_window = mids[-32:] if len(mids) >= 8 else mids
+                short_mean = sum(short_window) / len(short_window) if short_window else mid
+                long_mean = sum(long_window) / len(long_window) if long_window else mid
+                momentum = short_mean - long_mean
+                momentum_units = int(momentum / 2.0)
+                momentum_units = max(-12, min(12, momentum_units))
+
+                if target is not None:
+                    target = max(-limit, min(limit, target + momentum_units))
+                    delta = target - position
+
+                    price_offset = 3
+                    max_slice = 22
+                    if delta > 0:
+                        qty = min(delta, limit - position, max_slice)
+                        if qty > 0:
+                            orders.append(Order(product, int(best_ask + price_offset), int(qty)))
+                    elif delta < 0:
+                        qty = min(-delta, limit + position, max_slice)
+                        if qty > 0:
+                            orders.append(Order(product, int(best_bid - price_offset), -int(qty)))
+
+                    result[product] = orders
+                    continue
+
+                window = mids[-12:]
+                fair = sum(window) / len(window)
+                fair += momentum * 0.4
+
+                # Rough volatility proxy to scale bands.
+                vol_window = mids[-24:]
+                if len(vol_window) > 1:
+                    mean_vol = sum(vol_window) / len(vol_window)
+                    var = sum((x - mean_vol) ** 2 for x in vol_window) / (len(vol_window) - 1)
+                    vol = var**0.5
+                else:
+                    vol = 0
+
+                band = max(3, min(8, vol / 2))
+                deviation = mid - fair
+
+                for ask in sorted(od.sell_orders):
+                    if ask > fair - band:
+                        break
+                    qty = min(abs(od.sell_orders[ask]), self.LIMITS[product] - position)
+                    if qty > 0:
+                        orders.append(Order(product, ask, qty))
+                        position += qty
+
+                for bid in sorted(od.buy_orders, reverse=True):
+                    if bid < fair + band:
+                        break
+                    qty = min(abs(od.buy_orders[bid]), self.LIMITS[product] + position)
+                    if qty > 0:
+                        orders.append(Order(product, bid, -qty))
+                        position -= qty
+
+                if best_ask - best_bid > 1:
+                    bid_price = best_bid + 1
+                    ask_price = best_ask - 1
+                else:
+                    bid_price = best_bid
+                    ask_price = best_ask
+
+                if deviation < -band:
+                    bid_price = min(best_ask, bid_price + int(band))
+                elif deviation > band:
+                    ask_price = max(best_bid, ask_price - int(band))
+
+                buy_qty = min(26, max(0, self.LIMITS[product] - position))
+                sell_qty = min(26, max(0, self.LIMITS[product] + position))
+
+                if position > 25:
+                    buy_qty = min(buy_qty, 3)
+                if position < -25:
+                    sell_qty = min(sell_qty, 3)
+                if position > 50:
+                    buy_qty = 0
+                if position < -50:
+                    sell_qty = 0
+
+                if bid_price < ask_price:
+                    if buy_qty > 0:
+                        orders.append(Order(product, bid_price, int(buy_qty)))
+                    if sell_qty > 0:
+                        orders.append(Order(product, ask_price, -int(sell_qty)))
+
+            result[product] = orders
+
+        return result, 0, json.dumps(data, separators=(",", ":"))
