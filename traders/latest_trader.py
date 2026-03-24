@@ -183,12 +183,24 @@ class Trader:
                 target = self._target_from_timestamp(ts)
                 limit = self.LIMITS[product]
 
+                mids.append(mid)
+                if len(mids) > 96:
+                    mids[:] = mids[-96:]
+
+                short_window = mids[-8:] if len(mids) >= 4 else mids
+                long_window = mids[-32:] if len(mids) >= 8 else mids
+                short_mean = sum(short_window) / len(short_window) if short_window else mid
+                long_mean = sum(long_window) / len(long_window) if long_window else mid
+                momentum = short_mean - long_mean
+                momentum_units = int(momentum / 2.0)
+                momentum_units = max(-12, min(12, momentum_units))
+
                 if target is not None:
-                    target = max(-limit, min(limit, target))
+                    target = max(-limit, min(limit, target + momentum_units))
                     delta = target - position
 
-                    price_offset = 5
-                    max_slice = 20
+                    price_offset = 3
+                    max_slice = 22
                     if delta > 0:
                         qty = min(delta, limit - position, max_slice)
                         if qty > 0:
@@ -201,16 +213,24 @@ class Trader:
                     result[product] = orders
                     continue
 
-                mids.append(mid)
-                if len(mids) > 32:
-                    mids[:] = mids[-32:]
-
-                window = mids[-6:]
+                window = mids[-12:]
                 fair = sum(window) / len(window)
+                fair += momentum * 0.4
+
+                # Rough volatility proxy to scale bands.
+                vol_window = mids[-24:]
+                if len(vol_window) > 1:
+                    mean_vol = sum(vol_window) / len(vol_window)
+                    var = sum((x - mean_vol) ** 2 for x in vol_window) / (len(vol_window) - 1)
+                    vol = var**0.5
+                else:
+                    vol = 0
+
+                band = max(3, min(8, vol / 2))
                 deviation = mid - fair
 
                 for ask in sorted(od.sell_orders):
-                    if ask > fair - 4:
+                    if ask > fair - band:
                         break
                     qty = min(abs(od.sell_orders[ask]), self.LIMITS[product] - position)
                     if qty > 0:
@@ -218,7 +238,7 @@ class Trader:
                         position += qty
 
                 for bid in sorted(od.buy_orders, reverse=True):
-                    if bid < fair + 4:
+                    if bid < fair + band:
                         break
                     qty = min(abs(od.buy_orders[bid]), self.LIMITS[product] + position)
                     if qty > 0:
@@ -232,13 +252,13 @@ class Trader:
                     bid_price = best_bid
                     ask_price = best_ask
 
-                if deviation < -3:
-                    bid_price = min(best_ask, bid_price + 3)
-                elif deviation > 3:
-                    ask_price = max(best_bid, ask_price - 3)
+                if deviation < -band:
+                    bid_price = min(best_ask, bid_price + int(band))
+                elif deviation > band:
+                    ask_price = max(best_bid, ask_price - int(band))
 
-                buy_qty = min(24, max(0, self.LIMITS[product] - position))
-                sell_qty = min(24, max(0, self.LIMITS[product] + position))
+                buy_qty = min(26, max(0, self.LIMITS[product] - position))
+                sell_qty = min(26, max(0, self.LIMITS[product] + position))
 
                 if position > 25:
                     buy_qty = min(buy_qty, 3)
