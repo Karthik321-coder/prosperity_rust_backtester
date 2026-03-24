@@ -7,7 +7,7 @@ from datamodel import Order, OrderDepth, TradingState
 class Trader:
     LIMITS = {
         "EMERALDS": 80,
-        "TOMATOES": 120,
+        "TOMATOES": 100,
     }
 
     # Precomputed timestamp policy from offline calibration (no runtime file reads).
@@ -184,30 +184,23 @@ class Trader:
                 limit = self.LIMITS[product]
 
                 mids.append(mid)
-                if len(mids) > 128:
-                    mids[:] = mids[-128:]
+                if len(mids) > 96:
+                    mids[:] = mids[-96:]
 
-                short_window = mids[-10:] if len(mids) >= 5 else mids
-                long_window = mids[-40:] if len(mids) >= 8 else mids
+                short_window = mids[-8:] if len(mids) >= 4 else mids
+                long_window = mids[-32:] if len(mids) >= 8 else mids
                 short_mean = sum(short_window) / len(short_window) if short_window else mid
                 long_mean = sum(long_window) / len(long_window) if long_window else mid
                 momentum = short_mean - long_mean
-
-                # Slope signal from recent deltas to catch trend acceleration.
-                deltas = [b - a for a, b in zip(mids[-20:-1], mids[-19:])] if len(mids) >= 20 else []
-                slope = sum(deltas) / len(deltas) if deltas else 0
-
-                momentum_units = int(momentum / 1.5)
-                slope_units = int(slope / 0.8)
-                momentum_units = max(-18, min(18, momentum_units))
-                slope_units = max(-10, min(10, slope_units))
+                momentum_units = int(momentum / 2.0)
+                momentum_units = max(-12, min(12, momentum_units))
 
                 if target is not None:
-                    target = max(-limit, min(limit, target + momentum_units + slope_units))
+                    target = max(-limit, min(limit, target + momentum_units))
                     delta = target - position
 
-                    price_offset = 2
-                    max_slice = 26
+                    price_offset = 3
+                    max_slice = 22
                     if delta > 0:
                         qty = min(delta, limit - position, max_slice)
                         if qty > 0:
@@ -220,11 +213,12 @@ class Trader:
                     result[product] = orders
                     continue
 
-                window = mids[-16:]
+                window = mids[-12:]
                 fair = sum(window) / len(window)
-                fair += momentum * 0.3 + slope * 1.2
+                fair += momentum * 0.4
 
-                vol_window = mids[-32:]
+                # Rough volatility proxy to scale bands.
+                vol_window = mids[-24:]
                 if len(vol_window) > 1:
                     mean_vol = sum(vol_window) / len(vol_window)
                     var = sum((x - mean_vol) ** 2 for x in vol_window) / (len(vol_window) - 1)
@@ -232,7 +226,7 @@ class Trader:
                 else:
                     vol = 0
 
-                band = max(2, min(7, vol / 2 if vol else 3))
+                band = max(3, min(8, vol / 2))
                 deviation = mid - fair
 
                 for ask in sorted(od.sell_orders):
@@ -251,24 +245,28 @@ class Trader:
                         orders.append(Order(product, bid, -qty))
                         position -= qty
 
-                bid_price = best_bid + 1 if best_ask - best_bid > 1 else best_bid
-                ask_price = best_ask - 1 if best_ask - best_bid > 1 else best_ask
+                if best_ask - best_bid > 1:
+                    bid_price = best_bid + 1
+                    ask_price = best_ask - 1
+                else:
+                    bid_price = best_bid
+                    ask_price = best_ask
 
                 if deviation < -band:
                     bid_price = min(best_ask, bid_price + int(band))
                 elif deviation > band:
                     ask_price = max(best_bid, ask_price - int(band))
 
-                buy_qty = min(30, max(0, self.LIMITS[product] - position))
-                sell_qty = min(30, max(0, self.LIMITS[product] + position))
+                buy_qty = min(26, max(0, self.LIMITS[product] - position))
+                sell_qty = min(26, max(0, self.LIMITS[product] + position))
 
-                if position > 30:
-                    buy_qty = min(buy_qty, 4)
-                if position < -30:
-                    sell_qty = min(sell_qty, 4)
-                if position > 60:
+                if position > 25:
+                    buy_qty = min(buy_qty, 3)
+                if position < -25:
+                    sell_qty = min(sell_qty, 3)
+                if position > 50:
                     buy_qty = 0
-                if position < -60:
+                if position < -50:
                     sell_qty = 0
 
                 if bid_price < ask_price:
