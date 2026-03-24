@@ -7,7 +7,7 @@ from datamodel import Order, OrderDepth, TradingState
 class Trader:
     LIMITS = {
         "EMERALDS": 80,
-        "TOMATOES": 80,
+        "TOMATOES": 100,
     }
 
     # Precomputed timestamp policy from offline calibration (no runtime file reads).
@@ -187,14 +187,16 @@ class Trader:
                     target = max(-limit, min(limit, target))
                     delta = target - position
 
+                    price_offset = 5
+                    max_slice = 20
                     if delta > 0:
-                        qty = min(delta, limit - position, 14)
+                        qty = min(delta, limit - position, max_slice)
                         if qty > 0:
-                            orders.append(Order(product, int(best_ask + 10), int(qty)))
+                            orders.append(Order(product, int(best_ask + price_offset), int(qty)))
                     elif delta < 0:
-                        qty = min(-delta, limit + position, 14)
+                        qty = min(-delta, limit + position, max_slice)
                         if qty > 0:
-                            orders.append(Order(product, int(best_bid - 10), -int(qty)))
+                            orders.append(Order(product, int(best_bid - price_offset), -int(qty)))
 
                     result[product] = orders
                     continue
@@ -208,7 +210,7 @@ class Trader:
                 deviation = mid - fair
 
                 for ask in sorted(od.sell_orders):
-                    if ask > fair - 5:
+                    if ask > fair - 4:
                         break
                     qty = min(abs(od.sell_orders[ask]), self.LIMITS[product] - position)
                     if qty > 0:
@@ -216,7 +218,7 @@ class Trader:
                         position += qty
 
                 for bid in sorted(od.buy_orders, reverse=True):
-                    if bid < fair + 5:
+                    if bid < fair + 4:
                         break
                     qty = min(abs(od.buy_orders[bid]), self.LIMITS[product] + position)
                     if qty > 0:
@@ -235,16 +237,16 @@ class Trader:
                 elif deviation > 3:
                     ask_price = max(best_bid, ask_price - 3)
 
-                buy_qty = min(20, max(0, self.LIMITS[product] - position))
-                sell_qty = min(20, max(0, self.LIMITS[product] + position))
+                buy_qty = min(24, max(0, self.LIMITS[product] - position))
+                sell_qty = min(24, max(0, self.LIMITS[product] + position))
 
-                if position > 20:
+                if position > 25:
                     buy_qty = min(buy_qty, 3)
-                if position < -20:
+                if position < -25:
                     sell_qty = min(sell_qty, 3)
-                if position > 40:
+                if position > 50:
                     buy_qty = 0
-                if position < -40:
+                if position < -50:
                     sell_qty = 0
 
                 if bid_price < ask_price:
