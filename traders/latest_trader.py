@@ -91,8 +91,8 @@ class Trader:
                         orders.append(Order(product, bid, -qty))
                         position -= qty
 
-                buy_qty = min(12, max(0, limit - position))
-                sell_qty = min(12, max(0, limit + position))
+                buy_qty = max(0, limit - position)
+                sell_qty = max(0, limit + position)
 
                 if buy_qty > 0:
                     orders.append(Order(product, 9993, buy_qty))
